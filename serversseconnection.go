@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/teivah/onecontext"
 )
 
 type serverSSEConnection struct {
@@ -25,13 +23,11 @@ type serverSSEConnection struct {
 	sseFlusher  http.Flusher
 }
 
-func newServerSSEConnection(parentContext context.Context, requestContext context.Context,
-	connectionID string, writer http.ResponseWriter) (*serverSSEConnection, error) {
+func newServerSSEConnection(ctx context.Context, connectionID string, writer http.ResponseWriter) (*serverSSEConnection, error) {
 	sseFlusher, ok := writer.(http.Flusher)
 	if !ok {
 		return nil, errors.New("connection over Server Sent Events not supported with http.ResponseWriter: http.Flusher not implemented")
 	}
-	ctx, _ := onecontext.Merge(parentContext, requestContext)
 	s := serverSSEConnection{
 		ConnectionBase: ConnectionBase{
 			ctx:          ctx,
@@ -46,12 +42,12 @@ func newServerSSEConnection(parentContext context.Context, requestContext contex
 
 func (s *serverSSEConnection) consumeRequest(request *http.Request) int {
 	if err := s.Context().Err(); err != nil {
-		return 410 // Gone
+		return http.StatusGone // 410
 	}
 	s.mx.Lock()
 	if s.postWriting {
 		s.mx.Unlock()
-		return 409 // Conflict
+		return http.StatusConflict // 409
 	}
 	s.postWriting = true
 	s.mx.Unlock()
@@ -60,15 +56,15 @@ func (s *serverSSEConnection) consumeRequest(request *http.Request) int {
 	}()
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		return 400 // Bad request
+		return http.StatusBadRequest // 400
 	} else if _, err := s.postWriter.Write(body); err != nil {
-		return 500 // Server error
+		return http.StatusInternalServerError // 500
 	}
 	s.mx.Lock()
 	s.postWriting = false
 	s.mx.Unlock()
 	<-time.After(50 * time.Millisecond)
-	return 200
+	return http.StatusOK // 200
 }
 
 func (s *serverSSEConnection) Read(p []byte) (n int, err error) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	kitlog "github.com/go-kit/log"
+
 	"github.com/philippseith/signalr"
 	"github.com/philippseith/signalr/chatsample/middleware"
 	"github.com/philippseith/signalr/chatsample/public"
@@ -30,7 +31,8 @@ func (c *chat) OnDisconnected(connectionID string) {
 	c.Groups().RemoveFromGroup("group", connectionID)
 }
 
-func (c *chat) Send(message string) {
+func (c *chat) Broadcast(message string) {
+	// Broadcast to all clients
 	c.Clients().Group("group").Send("receive", message)
 }
 
@@ -98,6 +100,11 @@ func (c *chat) UploadStream(upload1 <-chan int, factor float64, upload2 <-chan f
 	}
 }
 
+func (c *chat) Abort() {
+	fmt.Println("Abort")
+	c.Hub.Abort()
+}
+
 //func runTCPServer(address string, hub signalr.HubInterface) {
 //	listener, err := net.Listen("tcp", address)
 //
@@ -124,12 +131,10 @@ func (c *chat) UploadStream(upload1 <-chan int, factor float64, upload2 <-chan f
 
 func runHTTPServer(address string, hub signalr.HubInterface) {
 	server, _ := signalr.NewServer(context.TODO(), signalr.SimpleHubFactory(hub),
-		signalr.InsecureSkipVerify(true),
-	//	signalr.AllowOriginPatterns([]string {}),
-		signalr.KeepAliveInterval(2*time.Second),
-		signalr.Logger(kitlog.NewLogfmtLogger(os.Stderr), true))
+		signalr.Logger(kitlog.NewLogfmtLogger(os.Stdout), false),
+		signalr.KeepAliveInterval(2*time.Second))
 	router := http.NewServeMux()
-	server.MapHTTP(router, "/chat")
+	server.MapHTTP(signalr.WithHTTPServeMux(router), "/chat")
 
 	fmt.Printf("Serving public content from the embedded filesystem\n")
 	router.Handle("/", http.FileServer(http.FS(public.FS)))
@@ -139,27 +144,41 @@ func runHTTPServer(address string, hub signalr.HubInterface) {
 	}
 }
 
-//func runHTTPClient(address string, client interface{}) {
-//	c, _ := signalr.NewHTTPClient(context.TODO(), address) // hubProtocol is determined inside
-//	c.SetReceiver(client)
-//	c.Start()
-//}
+func runHTTPClient(address string, receiver interface{}) error {
+	c, err := signalr.NewClient(context.Background(), nil,
+		signalr.WithReceiver(receiver),
+		signalr.WithAutoReconnect(func() (signalr.Connection, error) {
+			creationCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+			return signalr.NewHTTPConnection(creationCtx, address)
+		}),
+		signalr.Logger(kitlog.NewLogfmtLogger(os.Stdout), false))
+	if err != nil {
+		return err
+	}
+	c.Start()
+	fmt.Println("Client started")
+	return nil
+}
 
-//type client struct {
-//	signalr.Hub
-//}
-//
-//func (c *client) Receive(msg string) {
-//	fmt.Println(msg)
-//}
+type receiver struct {
+	signalr.Receiver
+}
+
+func (r *receiver) Receive(msg string) {
+	fmt.Println(msg)
+	// The silly client urges the server to end his connection after 10 seconds
+	r.Server().Send("abort")
+}
 
 func main() {
 	hub := &chat{}
 
 	//go runTCPServer("127.0.0.1:8007", hub)
 	go runHTTPServer("localhost:8086", hub)
-	//<-time.After(time.Millisecond * 2)
-	//go runHTTPClient("http://localhost:8086/chat", &client{})
+	<-time.After(time.Millisecond * 2)
+	go func() {
+		fmt.Println(runHTTPClient("http://localhost:8086/chat", &receiver{}))
+	}()
 	ch := make(chan struct{})
 	<-ch
 }

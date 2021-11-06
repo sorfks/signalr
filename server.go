@@ -29,7 +29,7 @@ import (
 // Note that HubClients.Caller() returns nil, because there is no real caller which can be reached over a HubConnection.
 type Server interface {
 	Party
-	MapHTTP(mux MappableRouter, path string)
+	MapHTTP(routerFactory func() MappableRouter, path string)
 	Serve(conn Connection) error
 	HubClients() HubClients
 	availableTransports() []string
@@ -87,24 +87,35 @@ type MappableRouter interface {
 	Handle(string, http.Handler)
 }
 
-// MapHTTP maps the servers hub to an path in an http.ServeMux
-func (s *server) MapHTTP(mux MappableRouter, path string) {
+// WithHTTPServeMux is a MappableRouter factory for MapHTTP which converts a
+// http.ServeMux to a MappableRouter.
+// For factories for other routers, see github.com/philippseith/signalr/router
+func WithHTTPServeMux(serveMux *http.ServeMux) func() MappableRouter {
+	return func() MappableRouter {
+		return serveMux
+	}
+}
+
+// MapHTTP maps the servers' hub to a path in a MappableRouter
+func (s *server) MapHTTP(routerFactory func() MappableRouter, path string) {
 	httpMux := newHTTPMux(s)
-	mux.HandleFunc(fmt.Sprintf("%s/negotiate", path), httpMux.negotiate)
-	mux.Handle(path, httpMux)
+	router := routerFactory()
+	router.HandleFunc(fmt.Sprintf("%s/negotiate", path), httpMux.negotiate)
+	router.Handle(path, httpMux)
 }
 
 // Serve serves the hub of the server on one connection.
 // The same server might serve different connections in parallel. Serve does not return until the connection is closed
 // or the servers' context is canceled.
 func (s *server) Serve(conn Connection) error {
-	if protocol, err := s.processHandshake(conn); err != nil {
+	protocol, err := s.processHandshake(conn)
+	if err != nil {
 		info, _ := s.prefixLoggers("")
 		_ = info.Log(evt, "processHandshake", "connectionId", conn.ConnectionID(), "error", err, react, "do not connect")
 		return err
-	} else {
-		return newLoop(s, conn, protocol).Run(make(chan struct{}, 1))
 	}
+
+	return newLoop(s, conn, protocol).Run(make(chan struct{}, 1))
 }
 
 func (s *server) HubClients() HubClients {

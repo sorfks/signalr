@@ -1,4 +1,4 @@
-PROJECT_NAME := "signalr"
+PROJECT_NAME := "signalr/router"
 PKG := "github.com/philippseith/$(PROJECT_NAME)"
 PKG_LIST := $(shell go list ${PKG}/... | grep -v /vendor/)
 GO_FILES := $(shell find . -name '*.go' | grep -v /vendor/ | grep -v _test.go)
@@ -11,7 +11,7 @@ dep: ## Get the dependencies
 	@go mod download
 
 lint: ## Lint Golang files
-	@golangci-lint run
+	@golint -set_exit_status ${PKG_LIST}
 
 vet: ## Run go vet
 	@go vet ${PKG_LIST}
@@ -28,9 +28,6 @@ build: dep ## Build the binary file
 
 clean: ## Remove previous build
 	@rm -f $(PROJECT_NAME)/build
-
-run-chatsample: ## run the local ./chatsample server
-	@go run ./chatsample/*.go
 
 help: ## Display this help screen
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'

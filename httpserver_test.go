@@ -43,7 +43,7 @@ var _ = Describe("HTTP server", func() {
 					server, err := NewServer(context.TODO(), SimpleHubFactory(&addHub{}), HTTPTransports(transport[0]), testLoggerOption())
 					Expect(err).NotTo(HaveOccurred())
 					router := http.NewServeMux()
-					server.MapHTTP(router, "/hub")
+					server.MapHTTP(WithHTTPServeMux(router), "/hub")
 					port := freePort()
 					go func() {
 						_ = http.ListenAndServe(fmt.Sprintf("127.0.0.1:%v", port), router)
@@ -73,7 +73,7 @@ var _ = Describe("HTTP server", func() {
 					server, err := NewServer(context.TODO(), SimpleHubFactory(&addHub{}), HTTPTransports(transport[0]), testLoggerOption())
 					Expect(err).NotTo(HaveOccurred())
 					router := http.NewServeMux()
-					server.MapHTTP(router, "/hub")
+					server.MapHTTP(WithHTTPServeMux(router), "/hub")
 					port := freePort()
 					go func() {
 						_ = http.ListenAndServe(fmt.Sprintf("127.0.0.1:%v", port), router)
@@ -97,7 +97,7 @@ var _ = Describe("HTTP server", func() {
 						Logger(logger, true))
 					Expect(err).NotTo(HaveOccurred())
 					router := http.NewServeMux()
-					server.MapHTTP(router, "/hub")
+					server.MapHTTP(WithHTTPServeMux(router), "/hub")
 					port := freePort()
 					go func() {
 						_ = http.ListenAndServe(fmt.Sprintf("127.0.0.1:%v", port), router)
@@ -105,30 +105,33 @@ var _ = Describe("HTTP server", func() {
 					waitForPort(port)
 
 					// Try first connection
-					conn, err := NewHTTPConnection(context.TODO(), fmt.Sprintf("http://127.0.0.1:%v/hub", port))
+					conn, err := NewHTTPConnection(context.Background(), fmt.Sprintf("http://127.0.0.1:%v/hub", port))
 					Expect(err).NotTo(HaveOccurred())
-					client, err := NewClient(context.TODO(),
-						conn,
+					ctx, cancelClient := context.WithCancel(context.Background())
+					client, err := NewClient(ctx,
+						WithConnection(conn),
 						Logger(logger, true),
 						TransferFormat(transport[1]))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(client).NotTo(BeNil())
-					err = client.Start()
-					Expect(err).NotTo(HaveOccurred())
+					client.Start()
+					Expect(<-client.WaitForState(context.Background(), ClientConnected)).NotTo(HaveOccurred())
 					result := <-client.Invoke("Add2", 1)
 					Expect(result.Error).NotTo(HaveOccurred())
 					Expect(result.Value).To(BeEquivalentTo(3))
 
 					// Try second connection
-					conn2, err := NewHTTPConnection(context.TODO(), fmt.Sprintf("http://127.0.0.1:%v/hub", port))
+					conn2, err := NewHTTPConnection(context.Background(), fmt.Sprintf("http://127.0.0.1:%v/hub", port))
 					Expect(err).NotTo(HaveOccurred())
-					client2, err := NewClient(context.TODO(),
-						conn2,
+					ctx2, cancelClient2 := context.WithCancel(context.Background())
+					client2, err := NewClient(ctx2,
+						WithConnection(conn2),
 						Logger(logger, true),
 						TransferFormat(transport[1]))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(client2).NotTo(BeNil())
-					_ = client2.Start()
+					client2.Start()
+					Expect(<-client2.WaitForState(context.Background(), ClientConnected)).NotTo(HaveOccurred())
 					result = <-client2.Invoke("Add2", 2)
 					Expect(result.Error).NotTo(HaveOccurred())
 					Expect(result.Value).To(BeEquivalentTo(4))
@@ -138,6 +141,8 @@ var _ = Describe("HTTP server", func() {
 					Expect(result.Error).NotTo(HaveOccurred())
 					s := result.Value.(string)
 					Expect(s).To(Equal(hugo))
+					cancelClient()
+					cancelClient2()
 					close(done)
 				}, 10.0)
 			})
@@ -149,7 +154,7 @@ var _ = Describe("HTTP server", func() {
 			server, err := NewServer(context.TODO(), SimpleHubFactory(&addHub{}), HTTPTransports("WebSockets"), testLoggerOption())
 			Expect(err).NotTo(HaveOccurred())
 			router := http.NewServeMux()
-			server.MapHTTP(router, "/hub")
+			server.MapHTTP(WithHTTPServeMux(router), "/hub")
 			port := freePort()
 			go func() {
 				_ = http.ListenAndServe(fmt.Sprintf("127.0.0.1:%v", port), router)
@@ -220,7 +225,7 @@ func handShakeAndCallWebSocketTestServer(port int, connectionID string) {
 	defer func() {
 		_ = ws.Close(websocket.StatusNormalClosure, "")
 	}()
-	wsConn := newWebSocketConnection(context.TODO(), context.TODO(), connectionID, ws)
+	wsConn := newWebSocketConnection(context.TODO(), connectionID, ws)
 	cliConn := newHubConnection(wsConn, &protocol, 1<<15, testLogger())
 	_, _ = wsConn.Write(append([]byte(`{"protocol": "json","version": 1}`), 30))
 	_, _ = wsConn.Write(append([]byte(`{"type":1,"invocationId":"666","target":"add2","arguments":[1]}`), 30))

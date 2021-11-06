@@ -8,9 +8,9 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/teivah/onecontext"
 	"nhooyr.io/websocket"
 )
 
@@ -18,21 +18,22 @@ type webSocketConnection struct {
 	ConnectionBase
 	conn         *websocket.Conn
 	transferMode TransferMode
-	watchDogChan chan dogFood
+	wdMx         sync.Mutex
+	dog          *watchDog
+	watchDogChan chan *watchDog
 }
 
-func newWebSocketConnection(parentContext context.Context, requestContext context.Context, connectionID string, conn *websocket.Conn) *webSocketConnection {
-	ctx, _ := onecontext.Merge(parentContext, requestContext)
+func newWebSocketConnection(ctx context.Context, connectionID string, conn *websocket.Conn) *webSocketConnection {
 	w := &webSocketConnection{
 		conn:         conn,
-		watchDogChan: make(chan dogFood, 1),
+		watchDogChan: make(chan *watchDog, 1),
 		ConnectionBase: ConnectionBase{
 			ctx:          ctx,
 			connectionID: connectionID,
 		},
 	}
 	log.Printf("%p: newWebSocketConnection: ConnectionID: %v", w, connectionID)
-	go w.watchDog(ctx)
+	go w.setupWatchDog(ctx)
 	return w
 }
 
@@ -47,7 +48,7 @@ func (w *webSocketConnection) Write(p []byte) (n int, err error) {
 	if w.transferMode == BinaryTransferMode {
 		messageType = websocket.MessageBinary
 	}
-	err = w.conn.Write(w.resetWatchDog(), messageType, p)
+	err = w.conn.Write(w.changeWatchDog(), messageType, p)
 	if err != nil {
 		return 0, err
 	}
@@ -59,7 +60,7 @@ func (w *webSocketConnection) Read(p []byte) (n int, err error) {
 	if err := w.Context().Err(); err != nil {
 		return 0, fmt.Errorf("webSocketConnection canceled: %w", w.ctx.Err())
 	}
-	msgType, data, err := w.conn.Read(w.resetWatchDog())
+	msgType, data, err := w.conn.Read(w.changeWatchDog())
 	log.Printf("%p: w.Read: msg: %v, err: %v, len(data): %d", w, msgType, err, len(data))
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -77,66 +78,73 @@ func (w *webSocketConnection) Read(p []byte) (n int, err error) {
 	return bytes.NewReader(data).Read(p)
 }
 
-// resetWatchDog resets the common watchDog for Read and Write.
-// the watchDog will stop waiting for the last set timeout and wait for the new timeout.
-func (w *webSocketConnection) resetWatchDog() context.Context {
-	log.Printf("%p: w.resetWatchDog", w)
-	ctx := w.ctx
-	food := dogFood{timeout: w.timeout}
-	if w.timeout > 0 {
-		ctx, food.bark = context.WithCancel(w.ctx)
-	}
-	w.watchDogChan <- food
-	return ctx
-}
-
-// dogFood is used to reset the watchDog
-type dogFood struct {
-	// After this, the dog will bark
-	timeout time.Duration
-	bark    context.CancelFunc
-}
-
-// watchDog is the common watchDog for Read and Write. It stops the connection (aka closes the Websocket)
-// when the last timeout has elapsed. If resetWatchDog is called before the last timeout has elapsed,
+// setupWatchDog starts the common watchDog for Read and Write. The watchDog stops the connection (aka closes the Websocket)
+// when the last timeout has elapsed. If changeWatchDog is called before the last timeout has elapsed,
 // the watchDog will restart waiting for the new timeout. If timeout is set to 0, it will not wait at all.
-func (w *webSocketConnection) watchDog(ctx context.Context) {
-	log.Printf("%p: w.watchDog", w)
-	var timer *time.Timer
-	var cancelTimeoutChan chan struct{}
+func (w *webSocketConnection) setupWatchDog(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case food := <-w.watchDogChan:
-			if timer != nil {
-				if !timer.Stop() {
-					go func() {
-						log.Printf("%p: w.watchDog - 95", w)
-						<-timer.C
-					}()
+		case newDog := <-w.watchDogChan:
+			w.wdMx.Lock()
+			if w.dog != nil {
+				if w.dog.timer != nil && !w.dog.timer.Stop() {
+					go func(c <-chan time.Time) {
+						<-c
+					}(w.dog.timer.C)
 				}
-				go func() {
-					log.Printf("%p: w.watchDog - 99", w)
-					cancelTimeoutChan <- struct{}{}
-				}()
+				w.dog.Cancel()
 			}
-			if food.timeout != 0 {
-				timer = time.NewTimer(food.timeout)
-				cancelTimeoutChan = make(chan struct{}, 1)
-				go func() {
-					log.Printf("%p: w.watchDog - 106", w)
-					select {
-					case <-cancelTimeoutChan:
-					case <-timer.C:
-						food.bark()
-					}
-				}()
-			} else {
-				log.Printf("%p: w.watchDog - 115", w)
-				timer = nil
+			w.dog = newDog
+			if w.dog != nil {
+				go w.dog.BarkOrDie()
 			}
+			w.wdMx.Unlock()
 		}
+	}
+}
+
+// changeWatchDog changes the common watchDog for Read and Write.
+// the watchDog will stop waiting for the last set timeout and wait for the new timeout.
+func (w *webSocketConnection) changeWatchDog() context.Context {
+	ctx := w.ctx
+	if w.timeout > 0 {
+		var dog *watchDog
+		ctx, dog = newWatchDog(w.ctx, w.timeout)
+		w.watchDogChan <- dog
+	} else {
+		w.watchDogChan <- nil
+	}
+	return ctx
+}
+
+type watchDog struct {
+	// After this, the dog will bark
+	timer      *time.Timer
+	cancelChan chan struct{}
+	bark       context.CancelFunc
+}
+
+func newWatchDog(ctx context.Context, timeout time.Duration) (context.Context, *watchDog) {
+	dog := &watchDog{
+		timer:      time.NewTimer(timeout),
+		cancelChan: make(chan struct{}),
+	}
+	var dogCtx context.Context
+	dogCtx, dog.bark = context.WithCancel(ctx)
+	return dogCtx, dog
+}
+
+func (d *watchDog) Cancel() {
+	close(d.cancelChan)
+}
+
+func (d *watchDog) BarkOrDie() {
+	select {
+	case <-d.cancelChan:
+	case <-d.timer.C:
+		d.bark()
 	}
 }
 

@@ -20,9 +20,10 @@ Protocol encoding in JSON is fully supported, and there is MessagePack support f
     - [Server side](#server-side)
         - [Implement the HubInterface](#implement-the-hubinterface)
         - [Serve with http.ServeMux](#serve-with-httpservemux)
-    - [Client side](#client-side)
+    - [Client side: JavaScript/TypeScript](#client-side-javascripttypescript)
         - [Grab copies of the signalr scripts](#grab-copies-of-the-signalr-scripts)
         - [Use a HubConnection to connect to your server Hub](#use-a-hubconnection-to-connect-to-your-server-hub)
+    - [Client side: go](#client-side-go)
 - [Debugging](#debugging)
 
 ## Install
@@ -83,7 +84,11 @@ func (c *chat) OnDisconnected(connectionID string) {
 #### Serve with http.ServeMux
 
 ```go
-import "net/http"
+import (
+    "net/http"
+	
+    "github.com/philippseith/signalr"
+)
 
 func runHTTPServer() {
     address := 'localhost:8080'
@@ -104,7 +109,7 @@ func runHTTPServer() {
     
     // ask the signalr server to map it's server
     // api routes to your custom baseurl
-    server.MapHTTP(router, "/chat")
+    server.MapHTTP(signalr.WithHTTPServeMux(router), "/chat")
 
     // in addition to mapping the signalr routes
     // your mux will need to serve the static files
@@ -124,7 +129,7 @@ func runHTTPServer() {
 }
 ```
 
-### Client side
+### Client side: JavaScript/TypeScript
 
 #### Grab copies of the signalr scripts
 
@@ -224,7 +229,47 @@ How you format your client UI is going to depend on your application use case bu
 </html>
 ```
 
-### Debugging
+### Client side: go
+
+To handle callbacks from the server, create a receiver class which gets the server callbacks mapped
+to its methods:
+```go
+type receiver struct {
+	signalr.Hub
+}
+
+func (c *receiver) Receive(msg string) {
+	fmt.Println(msg)
+}
+```
+`Receive` gets called when the server does something like this:
+```go
+hub.Clients().Caller().Send("receive", message)
+```
+
+The client itself might be used like that:
+```go
+// Create a Connection (with timeout for the negotiation process)
+creationCtx, _ := context.WithTimeout(ctx, 2 * time.Second)
+conn, err := signalr.NewHTTPConnection(creationCtx, address)
+if err != nil {
+    return err
+}
+// Create the client and set a receiver for callbacks from the server
+client, err := signalr.NewClient(ctx, conn,
+	signalr.WithConnection(conn),
+	signalr.WithReceiver(receiver))
+if err != nil {
+    return err
+}
+// Start the client loop
+c.Start()
+// Do some client work
+ch := <-c.Invoke("update", data)
+// ch gets the result of the update operation
+```
+
+## Debugging
 
 Server, Client and the protocol implementations are able to log most of their operations. The logging option is disabled
 by default in all tests. To configure logging, edit the `testLogConf.json` file:
