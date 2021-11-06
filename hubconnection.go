@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 )
@@ -102,6 +103,7 @@ func (c *defaultHubConnection) Receive() <-chan receiveResult {
 			default:
 				n, err := connection.Read(p)
 				if err != nil {
+					log.Printf("%p: c.Receive: err: %v", c, err)
 					select {
 					case recvChan <- receiveResult{err: err}:
 					case <-ctx.Done():

@@ -48,7 +48,7 @@ type server struct {
 // NewServer creates a new server for one type of hub. The hub type is set by one of the
 // options UseHub, HubFactory or SimpleHubFactory
 func NewServer(ctx context.Context, options ...func(Party) error) (Server, error) {
-	info, dbg := buildInfoDebugLogger(log.NewLogfmtLogger(os.Stderr), false)
+	info, dbg := buildInfoDebugLogger(log.NewLogfmtLogger(os.Stderr), true)
 	lifetimeManager := newLifeTimeManager(info)
 	server := &server{
 		lifetimeManager: &lifetimeManager,

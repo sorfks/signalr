@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	ll "log"
 	"reflect"
 
 	"github.com/go-kit/log"
@@ -174,6 +175,10 @@ func readJSONFrames(reader io.Reader, remainBuf *bytes.Buffer) ([][]byte, error)
 				_, _ = remainBuf.ReadFrom(buf)
 				return frames, nil
 			}
+		}
+
+		if n == 0 && errors.Is(err, io.EOF) {
+			ll.Printf("readJSONFrames: TODO: break cycle read on closed connection")
 		}
 	}
 }

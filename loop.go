@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -30,7 +31,7 @@ func newLoop(p Party, conn Connection, protocol hubProtocol) *loop {
 	pInfo, pDbg := p.prefixLoggers(conn.ConnectionID())
 	conn.SetTimeout(p.timeout())
 	hubConn := newHubConnection(conn, protocol, p.maximumReceiveMessageSize(), pInfo)
-	return &loop{
+	l := &loop{
 		party:        p,
 		protocol:     protocol,
 		hubConn:      hubConn,
@@ -40,6 +41,8 @@ func newLoop(p Party, conn Connection, protocol hubProtocol) *loop {
 		info:         pInfo,
 		dbg:          pDbg,
 	}
+	log.Printf("%p: newLoop with connection: %p (%v)", l, conn, conn.ConnectionID())
+	return l
 }
 
 var errCloseMessage = errors.New("CloseMessage received")
